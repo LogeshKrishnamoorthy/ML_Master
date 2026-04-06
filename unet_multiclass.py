@@ -59,13 +59,23 @@ class UNet_Multiclass(nn.Module):
         self.pool3 = nn.MaxPool2d(2)
 
         self.down4 = DoubleConv(256, 512)    
+        self.dropout_enc = nn.Dropout2d(0.2)
         self.pool4 = nn.MaxPool2d(2)
 
         # Bottleneck
         self.bottleneck = DoubleConv(512, 1024)
-
+        self.dropout = nn.Dropout2d(p=0.3) 
+        '''
+        reduce overfitting -> use dropout 
+        [1, 0, 1] --> 1 is alive and 0 is dropout 
+        Channel 0 → keep, Channel 1 → ❌ drop, Channel 2 → keep
+        Some feature maps are removed → forces network to:
+            Learn redundant representations
+            Not depend on specific channels
+        '''
         # Decoder (Expanding path)
         self.up4 = nn.ConvTranspose2d(1024, 512, kernel_size=2, stride=2)   # Increases spatial resolution --> Upsampling ,grow by factor of 2  
+        self.dropout_dec = nn.Dropout2d(0.1)
         self.conv4 = DoubleConv(1024, 512)
 
         self.up3 = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2)
@@ -92,10 +102,12 @@ class UNet_Multiclass(nn.Module):
         p3 = self.pool3(d3)
 
         d4 = self.down4(p3)
+        d4 = self.dropout_enc(d4)
         p4 = self.pool4(d4)
 
         # Bottleneck
         bottleneck = self.bottleneck(p4)
+        bottleneck = self.dropout(bottleneck)  # kept + scaled => output = input * mask / (1 - p)
 
         # Decoder with Skip Connections
         up4 = self.up4(bottleneck)   # batch, channels, H, W
@@ -106,6 +118,8 @@ class UNet_Multiclass(nn.Module):
             | `[skip, up]` (encoder first) | Works, but channel order is reversed; weights may learn differently |'''
         up4 = torch.cat([up4, d4_cropped], dim=1)   # concatenate along channels so dim=1 
         up4 = self.conv4(up4)
+        up4 = self.dropout_dec(up4)
+
 
         up3 = self.up3(up4)
         d3_cropped = crop_tensor(d3, up3)   # padding is 1 so no need to crop we directly apply up3,d3 in concatination
